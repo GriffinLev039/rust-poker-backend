@@ -1,0 +1,26 @@
+Determine hand order:
+
+I have a list of hands I need to find the greatest of.
+There is potential for every hand to be equal.
+I think the best method is to convert every hand into
+numerical values for its hand, since that function
+already exists. Same issue still applies tho, just rarer.
+I need an actual solution.
+
+Some form of mapping hands? One hand is given a middling score
+of table length, and then each following player score is +/- 1 depending on hand ranking.
+Compare scores, if score matches then assign player that same score?
+
+
+Sort array by hand value?
+
+A - Least
+B
+C
+D - Same as E, but has kicker
+E - Same as D, but loses to kicker
+
+
+
+Current Plan:
+	- Grab largest and return it ig
