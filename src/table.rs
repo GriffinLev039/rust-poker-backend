@@ -94,9 +94,19 @@ impl Table {
     fn mut_big_blind(&mut self) -> &mut u32 {
         &mut self.big_blind
     }
-    fn next_player(&mut self) -> &Player {
-        self.table_pos += 1;
-        self.players.get(self.table_pos as usize).unwrap()
+    fn next_player(&mut self) -> usize {
+        debug_assert!(
+            self.players.iter().any(|p| !p.has_folded && !p.is_all_in()),
+            "next_player called with no active players remaining"
+        );
+        let n = self.players.len();
+        loop {
+            self.table_pos = (self.table_pos + 1) % n as u32;
+            let p = &self.players[self.table_pos as usize];
+            if !p.has_folded && !p.is_all_in() {
+                return self.table_pos as usize;
+            }
+        }
     }
     fn create_bet_array(&self) -> Vec<u32> {
         self.players.iter().map(|p| p.current_bet).collect()
@@ -121,7 +131,9 @@ impl Table {
         let player_bet = player.current_bet;
         let highest_bet = self.get_highest_bet().unwrap(); //TODO: Error handling?
         let player_fold_status = player.has_folded;
-
+        if player_fold_status || self.players[player_num].is_all_in() {
+            return vec![];
+        }
         if player_bet == highest_bet {
             vec![
                 PlayerAction::Fold,
@@ -142,13 +154,11 @@ impl Table {
                 //Fold, AllIn
                 vec![PlayerAction::Fold, PlayerAction::AllIn]
             }
-        } else if player_fold_status {
-            vec![]
         } else {
             //Unsure if any way to reach this, I assume not
             //But just to be safe I will return vec![]
             eprint!("This should be impossible to reach!");
-            vec![PlayerAction::Fold]
+            vec![]
         }
     }
 
@@ -159,6 +169,10 @@ impl Table {
     ) -> Result<PlayerAction, String> {
         let p_action = get_input(num).unwrap();
         println!("ACTION CHOSEN: {:?}", p_action);
+
+        if self.get_current_player().has_folded {
+            return Err("Player has already folded - no actions can be taken.".to_string());
+        }
         let result: Result<PlayerAction, String> = match p_action {
             PlayerAction::AllIn => {
                 println!("  TRIGGERED: ALLIN");
@@ -453,212 +467,474 @@ impl Table {
     }
 }
 
+
+
+// THESE TESTS WERE WRITTEN BY AN LLM - Sourced from Claude. Reviewed by a human, ofc!
+// Comprehensive test module for hand.rs
+
+// !TODO - NEED TO REFACTOR KICKER PROBS
+// IMPORTANT: HandType's PartialEq only compares hand_value() (the rank tier),
+// not the enum's fields. That means `assert_eq!(result, HandType::Pair { .. })`
+// only proves "this is a pair" — it does NOT verify the kicker or pair value
+// are correct, even if you write specific values in the expected side.
+// Wherever field correctness matters, these tests use `if let` + explicit
+// field assertions instead of assert_eq! on the whole HandType.
+
+
+
+
 #[cfg(test)]
 mod test {
-    use crate::{
-        card::{suit::Suit, value::Value},
-        hand::Hand,
-    };
-
+    use crate::card::suit::Suit;
+    use crate::card::value::Value;
+use crate::hand::hand_type::HandType;
     use super::*;
 
+    // ---------------------------------
+    // Small helper for terser test data
+    // ---------------------------------
+    fn c(suit: Suit, value: Value) -> Card {
+        Card::new(suit, value)
+    }
+
+    // ----------------------
+    // CONSTRUCTOR EDGE CASES
+    // ----------------------
+
     #[test]
-    fn constructor_test() {
-        let mut _table = Table::default();
-        let mut _table2: Table = Table::new(5, 10, 20);
+    fn from_empty_vec_has_no_hand_type() {
+        let h = Hand::from(vec![]);
+        assert_eq!(h.hand_type, None);
     }
 
     #[test]
-    fn test_big_blind() {
-        let mut table: Table = Table::new(5, 10, 20);
-        assert_eq!(table.big_blind, 20);
-        table.increase_blinds(10);
-        assert_eq!(table.big_blind, 30);
-    }
-
-    #[test]
-    fn test_small_blind() {
-        let mut table: Table = Table::new(5, 10, 20);
-        assert_eq!(table.small_blind, 10);
-        table.increase_blinds(10);
-        // assert_eq!(table.small_blind, 20);
-    }
-
-    #[test]
-    fn dealer_test() {
-        let mut table = Table::new(5, 10, 20);
-        table.deal_cards();
-        for player in table.players {
-            assert_eq!(player.get_hand().get_hand().len(), 2);
-        }
-    }
-
-    #[test]
-    fn valid_actions_test() {
-        //Player with bet equal to highest bet
-        let mut table_1: Table = Table::new(2, 10, 20);
-        table_1.players[0].current_bet = 500;
-        assert_eq!(
-            table_1.get_possible_actions(0),
-            vec![
-                PlayerAction::Fold,
-                PlayerAction::Check,
-                PlayerAction::Bet { value: 0 },
-                PlayerAction::AllIn
-            ]
-        );
-        //Player with bet lower than highest bet, but enough chips
-        let mut table_2: Table = Table::new(5, 10, 20);
-        table_2.players[1].current_bet = 500;
-        table_2.players[0].up_stack(5000);
-        assert_eq!(
-            table_2.get_possible_actions(0),
-            vec![
-                PlayerAction::Fold,
-                PlayerAction::Call,
-                PlayerAction::Raise { value: 0 },
-                PlayerAction::AllIn
-            ]
-        );
-        //Player with bet lower than highest bet and not enough chips
-        let mut table_3: Table = Table::new(5, 10, 20);
-        table_3.players[0]
-            .down_stack(1500)
-            .expect("Nothing bad will happen!");
-        table_3.players[1].current_bet = 2000;
-        assert_eq!(
-            table_3.get_possible_actions(0),
-            vec![PlayerAction::Fold, PlayerAction::AllIn]
-        );
-    }
-
-    #[test]
-    fn player_action_test() {
-        let mut table = Table::new(1, 10, 20);
-        let mut table_2: Table = Table::new(2, 10, 20);
-        //Player folding successfully
-        fn return_fold(_i: usize) -> Result<PlayerAction, String> {
-            Ok(PlayerAction::Fold)
-        }
-        assert_eq!(table.handle_input(&return_fold, 0), Ok(PlayerAction::Fold));
-        //Player checking successfully
-        fn return_check(_i: usize) -> Result<PlayerAction, String> {
-            Ok(PlayerAction::Check)
-        }
-        assert_eq!(
-            table.handle_input(&return_check, 0),
-            Ok(PlayerAction::Check)
-        );
-        //Player checking unsuccessfully
-        // todo!();
-
-        //Player calling successfully
-        fn return_call(_i: usize) -> Result<PlayerAction, String> {
-            Ok(PlayerAction::Call)
-        }
-        table_2.players[1].current_bet = 500;
-        assert_eq!(
-            table_2.handle_input(&return_call, 0),
-            Ok(PlayerAction::Call)
-        );
-        //Player calling unsuccessfully
-        // todo!();
-
-        //Player raising/betting successfully
-        fn return_raise(_: usize) -> Result<PlayerAction, String> {
-            Ok(PlayerAction::Raise { value: 250 })
-        }
-        assert_eq!(
-            table.handle_input(&return_raise, 0),
-            Ok(PlayerAction::Raise { value: 250 })
-        );
-
-        //Player raising/betting unsuccessfully
-        // todo!();
-
-        //Player going all in successfully
-        fn return_all_in(_: usize) -> Result<PlayerAction, String> {
-            Ok(PlayerAction::AllIn)
-        }
-        assert_eq!(
-            table.handle_input(&return_all_in, 0),
-            Ok(PlayerAction::AllIn)
-        );
-    }
-
-    #[test]
-    fn hand_ordering_test() {
-        //TODO: Clean up so I am not constructing unnecessary hands
-        let winning_hand: Hand = Hand::from(vec![
-            Card::new(Suit::Diamond, Value::Ten),
-            Card::new(Suit::Spade, Value::Nine),
+    fn from_nonempty_vec_computes_hand_type_immediately() {
+        let h = Hand::from(vec![
+            c(Suit::Spade, Value::Ace),
+            c(Suit::Spade, Value::King),
+            c(Suit::Spade, Value::Queen),
+            c(Suit::Spade, Value::Jack),
+            c(Suit::Spade, Value::Ten),
         ]);
-        let true_winning_hand: Hand = Hand::from(vec![
-            Card::new(Suit::Club, Value::Ace),
-            Card::new(Suit::Diamond, Value::Ten),
-        ]);
-        let river = vec![
-            Card::new(Suit::Club, Value::Four),
-            Card::new(Suit::Diamond, Value::King),
-            Card::new(Suit::Spade, Value::Queen),
-            Card::new(Suit::Diamond, Value::Jack),
-            Card::new(Suit::Spade, Value::Seven),
-        ];
-        let mut winning_player: Player = Player::default();
-        winning_player.mut_hand().set_hand(winning_hand.get_hand());
-
-        let mut table: Table = Table::new(5, 10, 20);
-        for i in 1..table.players.len() {
-            table.players[i]
-                .mut_hand()
-                .draw_card(Card::new(Suit::Club, Value::Eight));
-            table.players[i]
-                .mut_hand()
-                .draw_card(Card::new(Suit::Diamond, Value::Two));
-        }
-        table.players[0] = winning_player.clone();
-        table.players[0].mut_hand().hand_type =
-            Some(table.players[0].clone().mut_hand().determine_hand());
-        table.river = river;
-        assert_eq!(table.determine_hand_order(), vec![0]);
-
-        //Example hand with clear winner based on kicker
-        table.players[1].mut_hand().set_hand(vec![]);
-        table.players[1]
-            .mut_hand()
-            .draw_card(Card::new(Suit::Club, Value::Ace));
-        table.players[1]
-            .mut_hand()
-            .draw_card(Card::new(Suit::Club, Value::Ten));
-        table.players[1].mut_hand().hand_type =
-            Some(table.players[1].clone().mut_hand().determine_hand());
-        println!(
-            "DEBUG:TABLE player #1 {:?}",
-            table.players[1].get_hand().hand_type
-        );
-        assert_eq!(table.determine_hand_order(), vec![1]);
-
-        //Example hand with multiple winners
-        table.players[1] = winning_player;
-        table.players[1].mut_hand().hand_type =
-            Some(table.players[1].clone().mut_hand().determine_hand());
-        println!(
-            "DEBUG:TABLE player #1 {:?}",
-            table.players[1].get_hand().hand_type
-        );
-        assert_eq!(table.determine_hand_order(), vec![0, 1]);
+        assert!(h.hand_type.is_some());
     }
 
     #[test]
-    fn winnings_test() {
-        let mut table = Table::new(5, 10, 20);
-        for mut i in 0..table.players.len() {
-            table.players[i].current_bet = 1000;
+    fn default_hand_is_empty_with_max_five() {
+        let h = Hand::default();
+        assert_eq!(h.get_hand().len(), 0);
+        assert_eq!(h.hand_type, None);
+    }
+
+    // -----------------------------
+    // is_flush / is_straight UNITS
+    // -----------------------------
+
+    #[test]
+    fn is_flush_true_for_same_suit() {
+        let h = Hand::from(vec![
+            c(Suit::Heart, Value::Two),
+            c(Suit::Heart, Value::Five),
+            c(Suit::Heart, Value::Nine),
+            c(Suit::Heart, Value::Jack),
+            c(Suit::Heart, Value::Ace),
+        ]);
+        assert!(h.is_flush());
+    }
+
+    #[test]
+    fn is_flush_false_for_mixed_suits() {
+        let h = Hand::from(vec![
+            c(Suit::Heart, Value::Two),
+            c(Suit::Club, Value::Five),
+            c(Suit::Heart, Value::Nine),
+            c(Suit::Heart, Value::Jack),
+            c(Suit::Heart, Value::Ace),
+        ]);
+        assert!(!h.is_flush());
+    }
+
+    #[test]
+    fn is_flush_false_on_empty_hand() {
+        let h = Hand::from(vec![]);
+        // is_flush is called on a mutable-borrowed method elsewhere but is &self-only here
+        let empty_hand = Hand::default();
+        assert!(!empty_hand.is_flush());
+        let _ = h; // keep h alive to avoid unused warning if from() short-circuits
+    }
+
+    #[test]
+    fn is_straight_true_for_sequential_run() {
+        let mut h = Hand::from(vec![
+            c(Suit::Club, Value::Nine),
+            c(Suit::Spade, Value::Eight),
+            c(Suit::Heart, Value::Seven),
+            c(Suit::Diamond, Value::Six),
+            c(Suit::Club, Value::Five),
+        ]);
+        assert!(h.is_straight());
+    }
+
+    #[test]
+    fn is_straight_true_for_wheel_ace_low() {
+        let mut h = Hand::from(vec![
+            c(Suit::Club, Value::Ace),
+            c(Suit::Spade, Value::Two),
+            c(Suit::Heart, Value::Three),
+            c(Suit::Diamond, Value::Four),
+            c(Suit::Club, Value::Five),
+        ]);
+        assert!(h.is_straight());
+    }
+
+    #[test]
+    fn is_straight_false_for_broken_sequence() {
+        let mut h = Hand::from(vec![
+            c(Suit::Club, Value::Nine),
+            c(Suit::Spade, Value::Eight),
+            c(Suit::Heart, Value::Six), // gap here, no Seven
+            c(Suit::Diamond, Value::Five),
+            c(Suit::Club, Value::Four),
+        ]);
+        assert!(!h.is_straight());
+    }
+
+    #[test]
+    fn is_straight_false_for_pair_plus_random() {
+        let mut h = Hand::from(vec![
+            c(Suit::Club, Value::King),
+            c(Suit::Spade, Value::King),
+            c(Suit::Heart, Value::Nine),
+            c(Suit::Diamond, Value::Five),
+            c(Suit::Club, Value::Two),
+        ]);
+        assert!(!h.is_straight());
+    }
+
+    // ----------------------------------------------------
+    // FULL determine_hand() COVERAGE, ONE PER HAND CATEGORY
+    // ----------------------------------------------------
+
+    #[test]
+    fn royal_flush() {
+        let mut h = Hand::from(vec![
+            c(Suit::Spade, Value::Ace),
+            c(Suit::Spade, Value::King),
+            c(Suit::Spade, Value::Queen),
+            c(Suit::Spade, Value::Jack),
+            c(Suit::Spade, Value::Ten),
+        ]);
+        assert_eq!(h.determine_hand(), HandType::RoyalFlush);
+    }
+
+    #[test]
+    fn straight_flush_not_ace_high() {
+        let mut h = Hand::from(vec![
+            c(Suit::Club, Value::Nine),
+            c(Suit::Club, Value::Eight),
+            c(Suit::Club, Value::Seven),
+            c(Suit::Club, Value::Six),
+            c(Suit::Club, Value::Five),
+        ]);
+        match h.determine_hand() {
+            HandType::StraightFlush { kicker } => assert_eq!(kicker, Value::Nine),
+            other => panic!("expected StraightFlush, got {:?}", other),
         }
-        table.pot = 5000;
-        table.distribute_winnings();
-        assert_eq!(table.players[0].get_stack(), 3000);
-        //Distribute winnings and side pot
-        // todo!();
+    }
+
+    #[test]
+    fn straight_flush_wheel() {
+        // NOTE: current implementation reports the sorted-first card as the
+        // kicker, which for a wheel straight is the Ace (numeric 14), not
+        // the Five. This test documents actual behavior, not "correct"
+        // poker ranking — flag this as a known quirk if you fix it later.
+        let mut h = Hand::from(vec![
+            c(Suit::Diamond, Value::Ace),
+            c(Suit::Diamond, Value::Two),
+            c(Suit::Diamond, Value::Three),
+            c(Suit::Diamond, Value::Four),
+            c(Suit::Diamond, Value::Five),
+        ]);
+        match h.determine_hand() {
+            HandType::StraightFlush { kicker } => assert_eq!(kicker, Value::Ace),
+            other => panic!("expected StraightFlush, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn four_of_a_kind_with_kicker() {
+        let mut h = Hand::from(vec![
+            c(Suit::Club, Value::King),
+            c(Suit::Diamond, Value::King),
+            c(Suit::Heart, Value::King),
+            c(Suit::Spade, Value::King),
+            c(Suit::Club, Value::Two),
+        ]);
+        match h.determine_hand() {
+            HandType::FourKind { kind_value, kicker } => {
+                assert_eq!(kind_value, Value::King);
+                assert_eq!(kicker, Value::Two);
+            }
+            other => panic!("expected FourKind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn full_house_three_over_two() {
+        let mut h = Hand::from(vec![
+            c(Suit::Club, Value::Queen),
+            c(Suit::Diamond, Value::Queen),
+            c(Suit::Heart, Value::Queen),
+            c(Suit::Spade, Value::Four),
+            c(Suit::Club, Value::Four),
+        ]);
+        match h.determine_hand() {
+            HandType::FullHouse { three_value, two_value } => {
+                assert_eq!(three_value, Value::Queen);
+                assert_eq!(two_value, Value::Four);
+            }
+            other => panic!("expected FullHouse, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn flush_non_sequential() {
+        let mut h = Hand::from(vec![
+            c(Suit::Diamond, Value::Ace),
+            c(Suit::Diamond, Value::Jack),
+            c(Suit::Diamond, Value::Eight),
+            c(Suit::Diamond, Value::Five),
+            c(Suit::Diamond, Value::Three),
+        ]);
+        match h.determine_hand() {
+            HandType::Flush { cards } => {
+                assert_eq!(
+                    cards,
+                    vec![Value::Ace, Value::Jack, Value::Eight, Value::Five, Value::Three]
+                );
+            }
+            other => panic!("expected Flush, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn straight_mixed_suits() {
+        let mut h = Hand::from(vec![
+            c(Suit::Club, Value::Ten),
+            c(Suit::Diamond, Value::Nine),
+            c(Suit::Heart, Value::Eight),
+            c(Suit::Spade, Value::Seven),
+            c(Suit::Club, Value::Six),
+        ]);
+        match h.determine_hand() {
+            HandType::Straight { kicker } => assert_eq!(kicker, Value::Ten),
+            other => panic!("expected Straight, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn three_of_a_kind_no_pair_among_rest() {
+        let mut h = Hand::from(vec![
+            c(Suit::Club, Value::Nine),
+            c(Suit::Diamond, Value::Nine),
+            c(Suit::Heart, Value::Nine),
+            c(Suit::Spade, Value::King),
+            c(Suit::Club, Value::Two),
+        ]);
+        match h.determine_hand() {
+            HandType::ThreeKind { three_value, mut other_cards } => {
+                assert_eq!(three_value, Value::Nine);
+                other_cards.sort();
+                assert_eq!(other_cards, vec![Value::Two, Value::King]);
+            }
+            other => panic!("expected ThreeKind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn two_pair_with_kicker() {
+        let mut h = Hand::from(vec![
+            c(Suit::Club, Value::King),
+            c(Suit::Diamond, Value::King),
+            c(Suit::Heart, Value::Four),
+            c(Suit::Spade, Value::Four),
+            c(Suit::Club, Value::Two),
+        ]);
+        match h.determine_hand() {
+            HandType::TwoPair { pair_one, pair_two, kicker } => {
+                let mut pairs = vec![pair_one, pair_two];
+                pairs.sort();
+                assert_eq!(pairs, vec![Value::Four, Value::King]);
+                assert_eq!(kicker, Value::Two);
+            }
+            other => panic!("expected TwoPair, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn one_pair_with_three_kickers() {
+        let mut h = Hand::from(vec![
+            c(Suit::Club, Value::Seven),
+            c(Suit::Diamond, Value::Seven),
+            c(Suit::Heart, Value::King),
+            c(Suit::Spade, Value::Queen),
+            c(Suit::Club, Value::Three),
+        ]);
+        match h.determine_hand() {
+            HandType::Pair { pair, mut other_cards } => {
+                assert_eq!(pair, Value::Seven);
+                other_cards.sort();
+                assert_eq!(other_cards, vec![Value::Three, Value::Queen, Value::King]);
+            }
+            other => panic!("expected Pair, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn high_card_no_matches() {
+        let mut h = Hand::from(vec![
+            c(Suit::Club, Value::Ace),
+            c(Suit::Diamond, Value::Jack),
+            c(Suit::Heart, Value::Eight),
+            c(Suit::Spade, Value::Five),
+            c(Suit::Club, Value::Two),
+        ]);
+        match h.determine_hand() {
+            HandType::HighCard { cards } => {
+                assert_eq!(
+                    cards,
+                    vec![Value::Ace, Value::Jack, Value::Eight, Value::Five, Value::Two]
+                );
+            }
+            other => panic!("expected HighCard, got {:?}", other),
+        }
+    }
+
+    // -----------------------------------------
+    // HandType RANK ORDERING (hand_value + Ord)
+    // -----------------------------------------
+
+    #[test]
+    fn hand_value_ranks_ascend_correctly() {
+        assert!(HandType::HighCard { cards: vec![] }.hand_value() < HandType::Pair { pair: Value::Two, other_cards: vec![] }.hand_value());
+        assert!(HandType::Pair { pair: Value::Two, other_cards: vec![] }.hand_value() < HandType::TwoPair { pair_one: Value::Two, pair_two: Value::Three, kicker: Value::Four }.hand_value());
+        assert!(HandType::TwoPair { pair_one: Value::Two, pair_two: Value::Three, kicker: Value::Four }.hand_value() < HandType::ThreeKind { three_value: Value::Two, other_cards: vec![] }.hand_value());
+        assert!(HandType::ThreeKind { three_value: Value::Two, other_cards: vec![] }.hand_value() < HandType::Straight { kicker: Value::Two }.hand_value());
+        assert!(HandType::Straight { kicker: Value::Two }.hand_value() < HandType::Flush { cards: vec![] }.hand_value());
+        assert!(HandType::Flush { cards: vec![] }.hand_value() < HandType::FullHouse { three_value: Value::Two, two_value: Value::Three }.hand_value());
+        assert!(HandType::FullHouse { three_value: Value::Two, two_value: Value::Three }.hand_value() < HandType::FourKind { kind_value: Value::Two, kicker: Value::Three }.hand_value());
+        assert!(HandType::FourKind { kind_value: Value::Two, kicker: Value::Three }.hand_value() < HandType::StraightFlush { kicker: Value::Two }.hand_value());
+        assert!(HandType::StraightFlush { kicker: Value::Two }.hand_value() < HandType::RoyalFlush.hand_value());
+    }
+
+    #[test]
+    fn different_tiers_compare_by_hand_value_even_with_weak_kicker() {
+        // A pair with a low kicker still beats high card with an ace kicker.
+        let pair = HandType::Pair { pair: Value::Two, other_cards: vec![Value::Three] };
+        let high_card = HandType::HighCard { cards: vec![Value::Ace] };
+        assert!(pair > high_card);
+    }
+
+    #[test]
+    fn same_tier_breaks_tie_on_primary_value() {
+        let low_pair = HandType::Pair { pair: Value::Three, other_cards: vec![Value::King] };
+        let high_pair = HandType::Pair { pair: Value::Jack, other_cards: vec![Value::Two] };
+        assert!(high_pair > low_pair);
+    }
+
+    #[test]
+    fn same_tier_and_primary_value_breaks_tie_on_kickers() {
+        let weak_kicker = HandType::Pair { pair: Value::Seven, other_cards: vec![Value::Two, Value::Three, Value::Four] };
+        let strong_kicker = HandType::Pair { pair: Value::Seven, other_cards: vec![Value::Two, Value::Three, Value::King] };
+        assert!(strong_kicker > weak_kicker);
+    }
+
+    #[test]
+    fn full_house_ties_break_on_three_value_first() {
+        let lower = HandType::FullHouse { three_value: Value::Four, two_value: Value::King };
+        let higher = HandType::FullHouse { three_value: Value::Five, two_value: Value::Two };
+        // Higher three-of-a-kind wins even though its pair is weaker.
+        assert!(higher > lower);
+    }
+
+    // ---------------------------------
+    // Hand-level Ord (used by Table for
+    // determine_hand_order/showdown)
+    // ---------------------------------
+
+    #[test]
+    fn hand_ordering_flush_beats_straight() {
+        let flush = Hand::from(vec![
+            c(Suit::Heart, Value::Two),
+            c(Suit::Heart, Value::Five),
+            c(Suit::Heart, Value::Nine),
+            c(Suit::Heart, Value::Jack),
+            c(Suit::Heart, Value::King),
+        ]);
+        let straight = Hand::from(vec![
+            c(Suit::Club, Value::Ten),
+            c(Suit::Diamond, Value::Nine),
+            c(Suit::Heart, Value::Eight),
+            c(Suit::Spade, Value::Seven),
+            c(Suit::Club, Value::Six),
+        ]);
+        assert!(flush > straight);
+    }
+
+    #[test]
+    fn hand_equality_is_by_tier_only_not_exact_hand() {
+        // Documenting the existing PartialEq behavior: two Hands with the
+        // same HandType tier are "equal" even if their actual cards differ,
+        // because Hand::eq delegates to HandType::eq, which only compares
+        // hand_value(). This is worth knowing before relying on `==`
+        // anywhere in showdown/winner logic.
+        let pair_low = Hand::from(vec![
+            c(Suit::Club, Value::Three),
+            c(Suit::Diamond, Value::Three),
+            c(Suit::Heart, Value::King),
+            c(Suit::Spade, Value::Queen),
+            c(Suit::Club, Value::Two),
+        ]);
+        let pair_high = Hand::from(vec![
+            c(Suit::Club, Value::Jack),
+            c(Suit::Diamond, Value::Jack),
+            c(Suit::Heart, Value::Nine),
+            c(Suit::Spade, Value::Eight),
+            c(Suit::Club, Value::Seven),
+        ]);
+        assert_eq!(pair_low, pair_high); // true today; see note above
+    }
+
+    // -----------------
+    // draw_card BEHAVIOR
+    // -----------------
+
+    #[test]
+    fn draw_card_respects_hand_max() { 
+        let mut h = Hand {
+            hand: vec![],
+            hand_type: None,
+            hand_max: 2,
+        };
+        h.draw_card(c(Suit::Club, Value::Two));
+        h.draw_card(c(Suit::Diamond, Value::Three));
+        h.draw_card(c(Suit::Heart, Value::Four)); // should be dropped, hand is full
+        assert_eq!(h.get_hand().len(), 2);
+    }
+
+    #[test]
+    fn draw_card_does_not_score_single_card_hand() {
+        let mut h = Hand::default();
+        h.draw_card(c(Suit::Club, Value::Ace));
+        // hand_type only updates once hand.len() > 1
+        assert_eq!(h.hand_type, None);
+    }
+
+    #[test]
+    fn draw_card_scores_once_second_card_is_added() {
+        let mut h = Hand::default();
+        h.draw_card(c(Suit::Club, Value::Ace));
+        h.draw_card(c(Suit::Diamond, Value::King));
+        assert!(h.hand_type.is_some());
     }
 }

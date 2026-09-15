@@ -10,9 +10,9 @@ const FIVE_VALUE: u32 = 5;
 
 #[derive(Debug, Clone)]
 pub struct Hand {
-    hand: Vec<Card>,
+    pub(crate) hand: Vec<Card>,
     pub hand_type: Option<HandType>,
-    hand_max: usize,
+    pub(crate) hand_max: usize,
 }
 
 impl Hand {
@@ -34,7 +34,7 @@ impl Hand {
     // COMPARISON LOGIC
     // ------------------
 
-    fn is_flush(&self) -> bool {
+    pub fn is_flush(&self) -> bool {
         if self.hand.is_empty() {
             return false;
         }
@@ -47,11 +47,12 @@ impl Hand {
         true
     }
 
-    fn is_straight(&mut self) -> bool {
-        self.hand.sort();
-        self.hand.reverse();
+    pub fn is_straight(&self) -> bool {
+        let mut dupe_hand = self.hand.clone();
+        dupe_hand.sort();
+        dupe_hand.reverse();
         // println!("[DEBUG] Hand: {:?}", self.hand);
-        let numeric_hand: Vec<u32> = self.hand.iter().map(|c| c.value.numeric_value()).collect();
+        let numeric_hand: Vec<u32> = dupe_hand.iter().map(|c| c.value.numeric_value()).collect();
 
         if numeric_hand[0] == ACE_VALUE && numeric_hand[1] == FIVE_VALUE {
             for i in 1..numeric_hand.len() - 1 {
@@ -265,6 +266,10 @@ mod test {
         let c5 = Card::new(Suit::Spade, Value::Ten);
         let c6 = Card::new(Suit::Spade, Value::Nine);
         let c7 = Card::new(Suit::Diamond, Value::Nine);
+        let c8 = Card::new(Suit::Club, Value::Two);
+        let c9 = Card::new(Suit::Club, Value::Three);
+        let c10 = Card::new(Suit::Diamond, Value::Four);
+        let c11 = Card::new(Suit::Heart, Value::Five);
         // ROYAL FLUSH
         assert_eq!(
             Hand::from(vec![c1, c2, c3, c4, c5]).determine_hand(),
@@ -307,6 +312,17 @@ mod test {
             Hand::from(vec![c2, c3, c4, c5, c7]).determine_hand(),
             HandType::Straight { kicker: c2.value }
         );
+
+        assert_eq!(
+            Hand::from(vec![c1, c8, c9, c10, c11]).determine_hand(),
+            HandType::Straight { kicker: c1.value }
+        );
+
+                assert_eq!(
+            Hand::from(vec![c1, c8, c9, c10, c11]).determine_hand(),
+            HandType::Straight { kicker: c1.value }
+        );
+
 
         // THREE KIND
         assert_eq!(
